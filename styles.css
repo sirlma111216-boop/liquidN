@@ -259,7 +259,10 @@ details.why .ans { padding: 0 18px 16px; color: var(--ink); }
 .compare .col li { margin-bottom: 5px; }
 
 /* 작은 카드 묶음 */
-.cardgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 0 0 16px; }
+/* 카드는 한 줄에 최대 3개까지만 (auto-fit 을 쓰면 넓은 화면에서 5개+1개로 갈라집니다) */
+.cardgrid { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0 0 16px; }
+@media (min-width: 640px) { .cardgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1000px) { .cardgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .minicard {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 18px; box-shadow: var(--shadow);

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>극저온의 세계 — 여름방학 과학탐구 캠프</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄️</text></svg>">
+</head>
+<body>
+
+<!-- ===== 상단 바 (휴대폰·태블릿에서만 보임) ===== -->
+<header id="topbar">
+  <button id="btn-menu" class="tbtn" aria-label="단계 목록 열기" aria-expanded="false">☰</button>
+  <div class="tb-left">
+    <span class="tb-logo">❄️</span>
+    <strong>극저온의 세계</strong>
+  </div>
+  <div class="tb-right">
+    <a class="tbtn" href="https://labbitory.com/lecture-student" title="홈으로 가기">🏠</a>
+    <button class="tbtn js-theme" title="밝게/어둡게">🌙</button>
+  </div>
+</header>
+
+<!-- ===== 왼쪽 사이드바 ===== -->
+<aside id="sidebar">
+  <div class="side-brand">
+    <span class="side-logo">❄️</span>
+    <strong>극저온의 세계</strong>
+  </div>
+
+  <div class="side-progress">
+    <div class="sp-top">
+      <span>진도</span>
+      <span id="sp-percent">0%</span>
+    </div>
+    <div class="sp-bar"><div class="sp-fill" id="sp-fill"></div></div>
+    <div class="sp-sub" id="sp-sub">아직 시작 전이에요</div>
+  </div>
+
+  <div class="side-actions">
+    <a class="sbtn" href="https://labbitory.com/lecture-student" title="홈으로 가기">🏠 홈</a>
+    <button class="sbtn js-theme" title="밝게/어둡게">🌙 화면</button>
+  </div>
+
+  <nav id="stepnav" aria-label="수업 단계"></nav>
+
+  <div class="side-foot">
+    총 <span id="sp-total">—</span> · 중학교 1~2학년
+  </div>
+</aside>
+
+<!-- 휴대폰에서 서랍이 열렸을 때 뒤를 덮는 막 -->
+<div id="scrim" hidden></div>
+
+<!-- ===== 본문 ===== -->
+<main id="app"></main>
+
+<!-- ===== 하단 이동 버튼 ===== -->
+<footer id="bottombar">
+  <button id="btn-prev" class="nav-btn">‹ 이전</button>
+  <span id="save-state" class="save-state">자동 저장됨</span>
+  <button id="btn-next" class="nav-btn primary">다음 ›</button>
+</footer>
+
+<!-- ===== 사진 확대 보기 ===== -->
+<div id="lightbox" class="lightbox" hidden>
+  <img id="lightbox-img" alt="확대한 사진">
+  <button id="lightbox-close" class="lightbox-close">✕</button>
+</div>
+
+<!-- ===== 알림 토스트 ===== -->
+<div id="toast" class="toast" hidden></div>
+
+<script src="godirect.js"></script>
+<script src="content.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

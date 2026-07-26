@@ -486,6 +486,31 @@ html[data-theme="dark"] .report-paper { background: #fdfdfd; }
   width: 44px; height: 44px; border-radius: 50%;
   border: none; background: rgba(255,255,255,.15); color: #fff; font-size: 20px; cursor: pointer;
 }
+/* 페이지 안에서 뜨는 확인창 (브라우저 confirm 대체) */
+.modal {
+  position: fixed; inset: 0; z-index: 130;
+  display: grid; place-items: center; padding: 20px;
+  background: rgba(6, 20, 34, .5); backdrop-filter: blur(3px);
+}
+.modal-box {
+  width: min(420px, 100%);
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 16px;
+  padding: 24px 24px 20px;
+  box-shadow: 0 12px 40px rgba(6, 24, 40, .3);
+}
+.modal-box h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
+.modal-box p { margin: 0; color: var(--ink-soft); font-size: 15.5px; line-height: 1.65; }
+.modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+.modal-btns .pbtn { padding: 11px 20px; }
+.pbtn.solid.danger { background: #e5484d; border-color: #e5484d; color: #fff; }
+.pbtn.solid.danger:hover { background: #c93b40; border-color: #c93b40; }
+
+@media (max-width: 480px) {
+  .modal-btns { flex-direction: column-reverse; }
+  .modal-btns .pbtn { width: 100%; justify-content: center; }
+}
+
 .toast {
   position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%);
   z-index: 120; background: #10243a; color: #fff;

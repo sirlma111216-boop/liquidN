@@ -34,6 +34,48 @@ function toast(msg, ms) {
   toastTimer = setTimeout(() => { t.hidden = true; }, ms || 2200);
 }
 
+/**
+ * 페이지 안에서 뜨는 확인창. `confirm()` 대신 씁니다.
+ *
+ * 브라우저 기본 confirm() 은 같은 페이지에서 여러 번 뜨면 크롬이
+ * "이 페이지에서 추가 대화상자를 표시하지 않음" 으로 막아 버립니다.
+ * 그러면 아무 것도 안 뜬 채 조용히 false 가 되어, 버튼이 고장 난 것처럼 보입니다.
+ * 그래서 대화상자에 의존하지 않고 직접 그립니다.
+ */
+function askConfirm(opts) {
+  const o = Object.assign({ title: '확인', body: '', ok: '확인', cancel: '취소', danger: false }, opts || {});
+  return new Promise(resolve => {
+    const wrap = el('div', 'modal');
+    wrap.innerHTML = `
+      <div class="modal-box" role="alertdialog" aria-modal="true" aria-label="${esc(o.title)}">
+        <h3>${esc(o.title)}</h3>
+        ${o.body ? `<p>${md(o.body)}</p>` : ''}
+        <div class="modal-btns">
+          <button class="pbtn" data-a="no">${esc(o.cancel)}</button>
+          <button class="pbtn solid${o.danger ? ' danger' : ''}" data-a="yes">${esc(o.ok)}</button>
+        </div>
+      </div>`;
+
+    const close = (v) => {
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+      if (e.key === 'Enter') { e.preventDefault(); close(true); }
+    };
+
+    $$('[data-a]', wrap).forEach(b =>
+      b.addEventListener('click', () => close(b.dataset.a === 'yes')));
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(false); });
+
+    document.body.appendChild(wrap);
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => { const y = $('[data-a="yes"]', wrap); if (y) y.focus(); }, 30);
+  });
+}
+
 /* -----------------------------------------------------------
    1. 저장소 — 글은 localStorage, 사진은 IndexedDB
 ----------------------------------------------------------- */
@@ -695,7 +737,7 @@ function buildPhotoZone(stepId) {
       t.innerHTML = `<img src="${r.dataUrl}" alt="실험 사진"><button class="del" title="삭제">✕</button>`;
       $('img', t).addEventListener('click', () => openLightbox(r.dataUrl));
       $('.del', t).addEventListener('click', async () => {
-        if (!confirm('이 사진을 지울까요?')) return;
+        if (!await askConfirm({ title: '이 사진을 지울까요?', ok: '지우기', danger: true })) return;
         await photoDB.remove(r.id);
         if (r.remoteId) sync.deletePhoto(r.remoteId);   // 다른 기기에서도 사라지게
         refresh(); renderNav();
@@ -943,8 +985,8 @@ function buildSensorLab() {
 
   $('#btn-connect', box).addEventListener('click', connectSensor);
   $('#btn-record', box).addEventListener('click', toggleRecording);
-  $('#btn-clear', box).addEventListener('click', () => {
-    if (!confirm('측정한 데이터를 모두 지울까요?')) return;
+  $('#btn-clear', box).addEventListener('click', async () => {
+    if (!await askConfirm({ title: '측정한 데이터를 모두 지울까요?', ok: '지우기', danger: true })) return;
     lab.points = []; redrawLab();
   });
   $('#btn-addrow', box).addEventListener('click', () => {
@@ -1205,9 +1247,15 @@ function buildSyncCard() {
         paint();
         toast('최신 상태로 맞췄어요 ✓');
       });
-      $('#btn-sync-off', card).addEventListener('click', () => {
-        if (!confirm('연결을 끊을까요?\n\n이 기기에 있는 기록과 사진은 그대로 남습니다.')) return;
+      $('#btn-sync-off', card).addEventListener('click', async () => {
+        const ok = await askConfirm({
+          title: '연결을 끊을까요?',
+          body: '이 기기에 있는 기록과 사진은 **그대로 남습니다.** 다시 이으려면 같은 코드를 입력하면 돼요.',
+          ok: '연결 끊기', danger: true
+        });
+        if (!ok) return;
         sync.disconnect();
+        toast('연결을 끊었어요.');
       });
 
     } else {
@@ -1368,8 +1416,18 @@ async function renderReport(main) {
   });
 
   $('#btn-reset-all', ctrl).addEventListener('click', async () => {
-    if (!confirm('정말 모두 지울까요?\n\n적은 내용과 사진이 전부 사라집니다.\nPDF를 먼저 저장했는지 확인하세요!')) return;
-    if (!confirm('한 번 더 확인합니다. 정말 지울까요?')) return;
+    const ok1 = await askConfirm({
+      title: '정말 모두 지울까요?',
+      body: '적은 내용과 사진이 **전부 사라집니다.** PDF를 먼저 저장했는지 확인하세요!',
+      ok: '지우기', danger: true
+    });
+    if (!ok1) return;
+    const ok2 = await askConfirm({
+      title: '한 번 더 확인합니다',
+      body: '되돌릴 수 없습니다. 정말 지울까요?',
+      ok: '네, 지웁니다', danger: true
+    });
+    if (!ok2) return;
     store.clearAll();
     await photoDB.clear();
     state.current = 0;

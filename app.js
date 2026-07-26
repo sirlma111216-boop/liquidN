@@ -57,7 +57,7 @@ const store = {
       toast('저장 공간이 부족합니다. 사진을 조금 지워 주세요.');
     }
   },
-  answer(id, val) { this.data.answers[id] = val; this.save(); },
+  answer(id, val) { this.data.answers[id] = val; this.save(); sync.schedulePush(); },
   get(id) { return this.data.answers[id] || ''; },
   clearAll() {
     localStorage.removeItem(LS_KEY);
@@ -81,12 +81,19 @@ const photoDB = {
   open() {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open('cryoCampPhotos', 1);
+      /* v2: 다른 기기에서 받아온 사진을 구분하려고 remoteId 색인을 추가했습니다 */
+      const req = indexedDB.open('cryoCampPhotos', 2);
       req.onupgradeneeded = (e) => {
         const db = e.target.result;
+        let os;
         if (!db.objectStoreNames.contains('photos')) {
-          const os = db.createObjectStore('photos', { keyPath: 'id', autoIncrement: true });
+          os = db.createObjectStore('photos', { keyPath: 'id', autoIncrement: true });
           os.createIndex('stepId', 'stepId', { unique: false });
+        } else {
+          os = e.target.transaction.objectStore('photos');
+        }
+        if (!os.indexNames.contains('remoteId')) {
+          os.createIndex('remoteId', 'remoteId', { unique: false });
         }
       };
       req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
@@ -94,10 +101,48 @@ const photoDB = {
     });
   },
   tx(mode) { return this.db.transaction('photos', mode).objectStore('photos'); },
-  async add(stepId, dataUrl) {
+  async add(stepId, dataUrl, remoteId) {
     await this.open();
     return new Promise((res, rej) => {
-      const r = this.tx('readwrite').add({ stepId, dataUrl, ts: Date.now() });
+      const r = this.tx('readwrite').add({ stepId, dataUrl, ts: Date.now(), remoteId: remoteId || null });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  },
+  /** 업로드 후 받은 서버 id 를 기록해 둡니다 (중복 내려받기 방지) */
+  async setRemoteId(id, remoteId) {
+    await this.open();
+    return new Promise((res, rej) => {
+      const os = this.tx('readwrite');
+      const g = os.get(id);
+      g.onsuccess = () => {
+        const row = g.result;
+        if (!row) return res();
+        row.remoteId = remoteId;
+        const p = os.put(row);
+        p.onsuccess = () => res();
+        p.onerror = () => rej(p.error);
+      };
+      g.onerror = () => rej(g.error);
+    });
+  },
+  /** 이미 가지고 있는 서버 사진 id 목록 */
+  async remoteIds() {
+    await this.open();
+    return new Promise((res, rej) => {
+      const out = new Set();
+      const r = this.tx('readonly').openCursor();
+      r.onsuccess = (e) => {
+        const c = e.target.result;
+        if (c) { if (c.value.remoteId) out.add(c.value.remoteId); c.continue(); } else res(out);
+      };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async get(id) {
+    await this.open();
+    return new Promise((res, rej) => {
+      const r = this.tx('readonly').get(id);
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
@@ -140,20 +185,40 @@ const photoDB = {
   }
 };
 
-/** 큰 사진은 줄여서 저장 (저장 공간 절약 + 보고서 인쇄 속도) */
+/**
+ * 큰 사진은 줄여서 저장합니다.
+ * 저장 공간 절약 + 보고서 인쇄 속도 + 다른 기기로 보낼 때의 용량 한도(약 400KB) 때문입니다.
+ * 한 번 줄여도 한도를 넘으면 품질을 낮춰 가며 다시 시도합니다.
+ */
+const PHOTO_MAX_CHARS = 380000;   // 서버 한도 400,000 보다 살짝 아래
+
 function shrinkImage(file, maxSide, quality) {
+  maxSide = maxSide || 1200;
+  quality = quality || 0.75;
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        let { width: w, height: h } = img;
-        const scale = Math.min(1, maxSide / Math.max(w, h));
-        w = Math.round(w * scale); h = Math.round(h * scale);
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        c.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(c.toDataURL('image/jpeg', quality));
+        const render = (side, q) => {
+          let w = img.width, h = img.height;
+          const scale = Math.min(1, side / Math.max(w, h));
+          w = Math.max(1, Math.round(w * scale));
+          h = Math.max(1, Math.round(h * scale));
+          const c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          return c.toDataURL('image/jpeg', q);
+        };
+
+        let side = maxSide, q = quality;
+        let out = render(side, q);
+        /* 너무 크면 품질 → 크기 순으로 낮춰 가며 다시 (최대 5회) */
+        for (let i = 0; i < 5 && out.length > PHOTO_MAX_CHARS; i++) {
+          if (q > 0.5) q -= 0.1; else side = Math.round(side * 0.8);
+          out = render(side, q);
+        }
+        resolve(out);
       };
       img.onerror = reject;
       img.src = reader.result;
@@ -245,6 +310,253 @@ function renderBlock(b) {
       return el('div');
   }
 }
+
+/* -----------------------------------------------------------
+   1-5. 기기 연결 (공유 코드)
+
+   노트북으로 기록하고 사진은 휴대폰으로 찍는 상황을 위한 기능입니다.
+   두 기기가 같은 5자리 코드로 연결되면 답변·측정데이터·사진이 한곳에 모입니다.
+
+   원칙
+     · 이름·학교·학년·반은 서버로 보내지 않습니다. 기기 안에만 둡니다.
+     · 연결이 실패해도 로컬 작업은 그대로 계속됩니다. 부가 기능일 뿐입니다.
+     · 답변은 "비어 있는 칸만 채우는" 방식으로 합칩니다. 남이 쓴 걸 지우지 않습니다.
+----------------------------------------------------------- */
+const sync = {
+  cfg: null,            // {configured, url, anonKey}
+  code: null,
+  state: 'off',         // off | ready | busy | error
+  message: '',
+  lastSaved: null,
+  pushTimer: null,
+  pollTimer: null,
+  busy: false,
+
+  get on() { return !!(this.cfg && this.cfg.configured && this.code); },
+
+  async init() {
+    this.code = localStorage.getItem('cryoCamp.code') || null;
+    try {
+      const r = await fetch('api/share-config', { cache: 'no-store' });
+      if (r.ok) this.cfg = await r.json();
+    } catch (e) { /* 오프라인이거나 서버 함수가 없는 환경 */ }
+
+    if (!this.cfg || !this.cfg.configured) {
+      this.cfg = null;
+      this.state = 'off';
+      return;
+    }
+    this.state = 'ready';
+    if (this.code) this.start();
+  },
+
+  /** Supabase REST 함수 호출. 실패는 HTTP 400 + {code:'P0001', message} 로 옵니다. */
+  async rpc(fn, args) {
+    const res = await fetch(`${this.cfg.url}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: {
+        'apikey': this.cfg.anonKey,
+        'Authorization': 'Bearer ' + this.cfg.anonKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(args || {})
+    });
+    if (res.status === 204) return null;               // 삭제 성공
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
+    if (!res.ok) {
+      const err = new Error((data && data.message) || `연결 오류 (${res.status})`);
+      err.rpcCode = data && data.code;
+      throw err;
+    }
+    return data;
+  },
+
+  /** 서버로 보낼 것 — 개인정보는 넣지 않습니다 */
+  payload() {
+    return {
+      answers: store.data.answers || {},
+      dataset: store.data.dataset || null,
+      team: store.data.profile.team || '',
+      app: 'cryo-camp'
+    };
+  },
+
+  async createCode() {
+    this.setState('busy', '코드를 만드는 중…');
+    try {
+      const code = await this.rpc('camp_create_session', { p_payload: this.payload() });
+      this.code = String(code).toUpperCase();
+      localStorage.setItem('cryoCamp.code', this.code);
+      this.setState('ready', '연결되었어요');
+      await this.uploadPendingPhotos();
+      this.start();
+      return this.code;
+    } catch (e) {
+      this.setState('error', e.message);
+      throw e;
+    }
+  },
+
+  async connect(rawCode) {
+    const code = String(rawCode || '').trim().toUpperCase();
+    if (code.length !== 5) throw new Error('코드는 5자리예요.');
+    this.setState('busy', '코드를 확인하는 중…');
+    try {
+      const info = await this.rpc('camp_load', { p_code: code });
+      this.code = info.code;
+      localStorage.setItem('cryoCamp.code', this.code);
+      this.mergeIn(info.payload || {});
+      this.setState('ready', '연결되었어요');
+      await this.pullPhotos();
+      await this.uploadPendingPhotos();
+      this.start();
+      return info;
+    } catch (e) {
+      this.setState('error', e.message);
+      throw e;
+    }
+  },
+
+  disconnect() {
+    this.stop();
+    this.code = null;
+    localStorage.removeItem('cryoCamp.code');
+    this.setState('ready', '');
+    renderNav();
+    render();
+  },
+
+  /** 받아온 기록을 로컬에 합칩니다 — 비어 있는 칸만 채웁니다 */
+  mergeIn(remote) {
+    let changed = 0;
+    const ra = (remote && remote.answers) || {};
+    Object.keys(ra).forEach(k => {
+      const mine = (store.data.answers[k] || '').trim();
+      const theirs = (ra[k] || '').trim();
+      if (!mine && theirs) { store.data.answers[k] = ra[k]; changed++; }
+    });
+    if (!store.data.dataset && remote && remote.dataset) {
+      store.data.dataset = remote.dataset; changed++;
+    }
+    if (!store.data.profile.team && remote && remote.team) {
+      store.data.profile.team = remote.team;
+    }
+    if (changed) store.save();
+    return changed;
+  },
+
+  /** 답변이 바뀌면 잠시 뒤 한 번만 저장 */
+  schedulePush() {
+    if (!this.on) return;
+    clearTimeout(this.pushTimer);
+    this.pushTimer = setTimeout(() => this.push(), 1500);
+  },
+
+  async push() {
+    if (!this.on) return;
+    try {
+      const at = await this.rpc('camp_save', { p_code: this.code, p_payload: this.payload() });
+      this.lastSaved = at ? new Date(at) : new Date();
+      this.setState('ready', '');
+    } catch (e) {
+      this.setState('error', e.message);
+    }
+  },
+
+  async pull() {
+    if (!this.on || this.busy) return;
+    this.busy = true;
+    try {
+      const info = await this.rpc('camp_load', { p_code: this.code });
+      const changed = this.mergeIn(info.payload || {});
+      const added = await this.pullPhotos();
+      this.setState('ready', '');
+      if (changed || added) {
+        renderNav();
+        render();
+        toast(`다른 기기의 기록을 가져왔어요${added ? ` (사진 ${added}장)` : ''}`);
+      }
+    } catch (e) {
+      this.setState('error', e.message);
+    } finally {
+      this.busy = false;
+    }
+  },
+
+  /** 서버에 있는데 이 기기에 없는 사진을 내려받습니다 */
+  async pullPhotos() {
+    if (!this.on) return 0;
+    const list = await this.rpc('camp_photo_list', { p_code: this.code }) || [];
+    const have = await photoDB.remoteIds();
+    const missing = list.filter(p => !have.has(p.id));
+    let n = 0;
+    for (const p of missing) {
+      try {
+        const data = await this.rpc('camp_photo_get', { p_code: this.code, p_id: p.id });
+        if (data) { await photoDB.add(p.stepId, data, p.id); n++; }
+      } catch (e) { console.warn('사진 내려받기 실패', e); }
+    }
+    return n;
+  },
+
+  /** 아직 서버에 없는 이 기기의 사진을 올립니다 */
+  async uploadPendingPhotos() {
+    if (!this.on) return 0;
+    const rows = await photoDB.all();
+    let n = 0;
+    for (const r of rows) {
+      if (r.remoteId) continue;
+      try {
+        const id = await this.rpc('camp_photo_add',
+          { p_code: this.code, p_step_id: r.stepId, p_data: r.dataUrl });
+        await photoDB.setRemoteId(r.id, id);
+        n++;
+      } catch (e) { console.warn('사진 올리기 실패', e); }
+    }
+    return n;
+  },
+
+  async uploadPhoto(localId) {
+    if (!this.on) return;
+    const row = await photoDB.get(localId);
+    if (!row || row.remoteId) return;
+    try {
+      const id = await this.rpc('camp_photo_add',
+        { p_code: this.code, p_step_id: row.stepId, p_data: row.dataUrl });
+      await photoDB.setRemoteId(localId, id);
+      this.setState('ready', '');
+    } catch (e) {
+      this.setState('error', e.message);
+    }
+  },
+
+  async deletePhoto(remoteId) {
+    if (!this.on || !remoteId) return;
+    try { await this.rpc('camp_photo_delete', { p_code: this.code, p_id: remoteId }); }
+    catch (e) { console.warn('사진 삭제 실패', e); }
+  },
+
+  start() {
+    this.stop();
+    /* 다른 기기에서 올린 것을 주기적으로 확인 */
+    this.pollTimer = setInterval(() => this.pull(), 20000);
+    document.addEventListener('visibilitychange', this.onVisible);
+  },
+  stop() {
+    clearInterval(this.pollTimer);
+    this.pollTimer = null;
+    document.removeEventListener('visibilitychange', this.onVisible);
+  },
+  onVisible() { if (!document.hidden) sync.pull(); },
+
+  setState(state, message) {
+    this.state = state;
+    this.message = message || '';
+    paintSyncBadge();
+  }
+};
 
 /* -----------------------------------------------------------
    1-9. 넓은 화면에서의 2단 배치
@@ -385,6 +697,7 @@ function buildPhotoZone(stepId) {
       $('.del', t).addEventListener('click', async () => {
         if (!confirm('이 사진을 지울까요?')) return;
         await photoDB.remove(r.id);
+        if (r.remoteId) sync.deletePhoto(r.remoteId);   // 다른 기기에서도 사라지게
         refresh(); renderNav();
       });
       thumbs.appendChild(t);
@@ -394,16 +707,23 @@ function buildPhotoZone(stepId) {
   async function handleFiles(files) {
     if (!files || !files.length) return;
     toast('사진을 저장하는 중…', 1200);
+    const added = [];
     for (const f of files) {
       if (!f.type.startsWith('image/')) continue;
       try {
-        const url = await shrinkImage(f, 1400, 0.82);
-        await photoDB.add(stepId, url);
+        const url = await shrinkImage(f, 1200, 0.75);
+        added.push(await photoDB.add(stepId, url));
       } catch (e) { console.warn(e); toast('사진을 저장하지 못했습니다.'); }
     }
     await refresh();
     renderNav();
     toast('사진이 저장되었어요 ✓');
+
+    /* 기기가 연결돼 있으면 뒤이어 올립니다. 실패해도 이 기기의 사진은 그대로입니다. */
+    if (sync.on && added.length) {
+      for (const id of added) await sync.uploadPhoto(id);
+      refresh();
+    }
   }
 
   $$('[data-act]', wrap).forEach(btn => {
@@ -645,6 +965,7 @@ function buildSensorLab() {
     if (!lab.points.length) { toast('저장할 데이터가 없어요.'); return; }
     store.data.dataset = { points: lab.points.slice(), savedAt: Date.now(), source: lab.mode };
     store.save();
+    sync.schedulePush();
     updateSaveInfo();
     toast('보고서에 데이터를 담았어요 ✓');
     renderNav();
@@ -822,6 +1143,8 @@ function renderIntro(main) {
   ag.checked = !!store.data.agreed;
   ag.addEventListener('change', () => { store.data.agreed = ag.checked; store.save(); });
 
+  if (sync.cfg) main.appendChild(buildSyncCard());
+
   const c2 = el('div', 'card');
   const rows = STEPS.filter(s => s.id !== 'intro').map(s =>
     `<tr><td>${s.icon}</td><td>${esc(s.title)}</td><td>${s.minutes}분</td></tr>`).join('');
@@ -838,6 +1161,95 @@ function renderIntro(main) {
       <li>액화질소가 몸이나 옷에 고이면 즉시 털어내고 선생님께 알립니다.</li>
     </ul>`;
   main.appendChild(c3);
+}
+
+/** 시작 화면의 「휴대폰과 이어서 쓰기」 카드 */
+function buildSyncCard() {
+  const card = el('div', 'card sync-card');
+
+  const draw = () => {
+    if (sync.code) {
+      card.innerHTML = `
+        <h3 style="margin-top:0">📱 휴대폰과 이어서 쓰기</h3>
+        <p class="hint" style="margin-top:0">아래 코드를 <b>다른 기기에서 입력</b>하면 같은 보고서에 사진과 기록이 모입니다.</p>
+        <div class="code-show">
+          <span class="code-big" id="code-big">${esc(sync.code)}</span>
+          <button class="pbtn" id="btn-code-copy">📋 복사</button>
+        </div>
+        <p class="hint" id="sync-info"></p>
+        <div class="lab-buttons">
+          <button class="pbtn" id="btn-sync-now">🔄 지금 불러오기</button>
+          <button class="pbtn" id="btn-sync-off" style="border-color:#e5484d;color:#e5484d">연결 끊기</button>
+        </div>`;
+
+      const info = $('#sync-info', card);
+      const paint = () => {
+        const t = sync.lastSaved
+          ? `${sync.lastSaved.getHours()}시 ${String(sync.lastSaved.getMinutes()).padStart(2, '0')}분에 저장됨`
+          : '아직 저장 전';
+        info.innerHTML = sync.state === 'error'
+          ? `⚠️ ${esc(sync.message)} — 인터넷을 확인하고 [지금 불러오기]를 눌러 보세요. <b>적은 내용은 이 기기에 그대로 남아 있습니다.</b>`
+          : `${t} · 이름과 학교는 서버로 보내지 않습니다.`;
+      };
+      paint();
+
+      $('#btn-code-copy', card).addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(sync.code); toast('코드를 복사했어요 ✓'); }
+        catch (e) { toast('복사가 안 되면 손으로 적어 주세요.'); }
+      });
+      $('#btn-sync-now', card).addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        await sync.push();
+        await sync.pull();
+        e.target.disabled = false;
+        paint();
+        toast('최신 상태로 맞췄어요 ✓');
+      });
+      $('#btn-sync-off', card).addEventListener('click', () => {
+        if (!confirm('연결을 끊을까요?\n\n이 기기에 있는 기록과 사진은 그대로 남습니다.')) return;
+        sync.disconnect();
+      });
+
+    } else {
+      card.innerHTML = `
+        <h3 style="margin-top:0">📱 휴대폰과 이어서 쓰기</h3>
+        <p class="hint" style="margin-top:0">노트북으로 기록하고 사진은 휴대폰으로 찍나요?
+          <b>코드 하나로 두 기기를 이으면</b> 한 보고서에 모입니다.</p>
+        <div class="lab-buttons">
+          <button class="pbtn solid" id="btn-code-new">🔑 내 코드 만들기</button>
+        </div>
+        <div class="code-join">
+          <div class="field" style="flex:1 1 200px;margin:0">
+            <label for="code-in">이미 코드가 있나요?</label>
+            <input type="text" id="code-in" maxlength="5" placeholder="예) K7QF2" autocomplete="off"
+                   style="text-transform:uppercase;letter-spacing:.25em;font-weight:700">
+          </div>
+          <button class="pbtn" id="btn-code-join">연결하기</button>
+        </div>
+        <p class="hint" id="join-msg"></p>`;
+
+      const msg = $('#join-msg', card);
+
+      $('#btn-code-new', card).addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        msg.textContent = '';
+        try { await sync.createCode(); draw(); toast('코드를 만들었어요 ✓'); }
+        catch (err) { msg.innerHTML = `⚠️ ${esc(err.message)}`; e.target.disabled = false; }
+      });
+
+      const join = async () => {
+        const v = $('#code-in', card).value;
+        msg.textContent = '';
+        try { await sync.connect(v); draw(); renderNav(); toast('연결되었어요 ✓'); }
+        catch (err) { msg.innerHTML = `⚠️ ${esc(err.message)}`; }
+      };
+      $('#btn-code-join', card).addEventListener('click', join);
+      $('#code-in', card).addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+    }
+  };
+
+  draw();
+  return card;
 }
 
 function renderBreak(main, step) {
@@ -1100,6 +1512,21 @@ function renderNav() {
   }
 }
 
+/** 사이드바의 기기 연결 상태 표시 */
+function paintSyncBadge() {
+  const box = $('#side-sync');
+  if (!box) return;
+  if (!sync.cfg || !sync.code) { box.hidden = true; return; }
+
+  box.hidden = false;
+  const dot = $('#sync-dot'), txt = $('#sync-text');
+  dot.className = 'sync-dot ' + (sync.state === 'error' ? 'bad' : sync.state === 'busy' ? 'busy' : 'ok');
+  txt.innerHTML = sync.state === 'error'
+    ? `연결 문제 — <b>${esc(sync.code)}</b>`
+    : `기기 연결됨 <b>${esc(sync.code)}</b>`;
+  box.title = sync.message || '';
+}
+
 /** 사이드바의 진도 막대 — 기록을 남긴 단계 비율 */
 function renderProgress() {
   const lessons = STEPS.filter(s => s.records && s.records.length);
@@ -1220,6 +1647,11 @@ function init() {
   window.addEventListener('resize', () => { redrawLab(); if (innerWidth >= 1024) closeDrawer(); });
 
   photoDB.open().catch(e => console.warn('사진 저장소를 열지 못했습니다.', e));
+
+  /* 기기 연결은 부가 기능이라, 실패해도 앱은 그대로 동작합니다 */
+  sync.init()
+    .then(() => { paintSyncBadge(); if (state.current === 0) render(); if (sync.on) sync.pull(); })
+    .catch(e => console.warn('기기 연결 준비 실패', e));
 
   /* 새로고침해도 보던 단계로 돌아오게 */
   const saved = parseInt(localStorage.getItem('cryoCamp.step'), 10);

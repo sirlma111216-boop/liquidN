@@ -110,6 +110,30 @@ html, body {
 .sp-fill { height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--brand), var(--accent)); transition: width .35s ease; }
 .sp-sub { margin-top: 8px; font-size: 12.5px; color: var(--ink-soft); }
 
+/* 기기 연결 상태 */
+.side-sync {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 20px; border-bottom: 1px solid var(--line);
+  background: var(--brand-soft); font-size: 12.5px; color: var(--brand-deep);
+}
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: 0 0 auto; }
+.sync-dot.busy { background: #f0a020; }
+.sync-dot.bad { background: #e5484d; }
+.sync-text b { letter-spacing: .12em; }
+
+/* 시작 화면의 연결 카드 */
+.sync-card .code-show {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--card-2); border: 1px solid var(--line);
+  border-radius: 12px; padding: 14px 18px; margin-bottom: 10px;
+}
+.code-big {
+  font-size: clamp(30px, 7vw, 40px); font-weight: 800;
+  letter-spacing: .22em; color: var(--brand-deep);
+  font-variant-numeric: tabular-nums;
+}
+.code-join { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; }
+
 .side-actions { display: flex; gap: 8px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .sbtn {
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;

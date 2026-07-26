@@ -25,9 +25,43 @@ const MIME = {
   '.ico': 'image/x-icon'
 };
 
+/**
+ * 배포된 Cloudflare 에서는 functions/api/share-config.js 가 이 응답을 만듭니다.
+ * 로컬(시작.bat)에서도 기기 연결 기능을 쓸 수 있도록 같은 응답을 흉내 냅니다.
+ *   · 환경변수 SUPABASE_URL / SUPABASE_ANON_KEY 가 있으면 그것을 쓰고,
+ *   · 없으면 share-config.local.json 파일을 찾습니다. (이 파일은 커밋되지 않습니다)
+ *   · 둘 다 없으면 {configured:false} → 앱은 공유 기능만 조용히 끕니다.
+ */
+function shareConfig() {
+  let url = process.env.SUPABASE_URL || '';
+  let key = process.env.SUPABASE_ANON_KEY || '';
+
+  if (!url || !key) {
+    try {
+      const f = JSON.parse(fs.readFileSync(path.join(ROOT, 'share-config.local.json'), 'utf8'));
+      url = url || f.url || f.SUPABASE_URL || '';
+      key = key || f.anonKey || f.SUPABASE_ANON_KEY || '';
+    } catch (e) { /* 파일이 없으면 그냥 넘어감 */ }
+  }
+
+  url = String(url).trim().replace(/\/+$/, '').replace(/\/rest\/v1$/, '').replace(/\/+$/, '');
+  key = String(key).trim();
+
+  return (url && key) ? { configured: true, url, anonKey: key } : { configured: false };
+}
+
 const server = http.createServer((req, res) => {
   let rel = decodeURIComponent(req.url.split('?')[0]);
   if (rel === '/' || rel === '') rel = '/index.html';
+
+  if (rel === '/api/share-config') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    });
+    res.end(JSON.stringify(shareConfig()));
+    return;
+  }
 
   const filePath = path.join(ROOT, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
   if (!filePath.startsWith(ROOT)) { res.writeHead(403).end('Forbidden'); return; }

@@ -408,8 +408,16 @@ const sync = {
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
     if (!res.ok) {
-      const err = new Error((data && data.message) || `연결 오류 (${res.status})`);
-      err.rpcCode = data && data.code;
+      const rpcCode = data && data.code;
+      /* P0001 은 우리가 SQL 에서 직접 띄운 한글 메시지라 그대로 보여 준다.
+         그 밖의 것(PGRST*, 권한 오류 등)은 학생이 이해할 수 없는 영어라 바꿔 준다. */
+      const raw = (data && data.message) || '';
+      const friendly = rpcCode === 'P0001'
+        ? raw
+        : '서버와 연결하지 못했어요. 잠시 뒤 다시 시도하거나 선생님께 알려 주세요.';
+      const err = new Error(friendly);
+      err.rpcCode = rpcCode;
+      err.rawMessage = raw;
       throw err;
     }
     return data;
@@ -462,12 +470,24 @@ const sync = {
   },
 
   disconnect() {
+    this.forget();
+    renderNav();
+    render();
+  },
+
+  /** 화면을 다시 그리지 않고 연결만 해제합니다 (지우기 흐름에서 씁니다) */
+  forget() {
     this.stop();
     this.code = null;
     localStorage.removeItem('cryoCamp.code');
-    this.setState('ready', '');
-    renderNav();
-    render();
+    this.lastSaved = null;
+    this.setState(this.cfg && this.cfg.configured ? 'ready' : 'off', '');
+  },
+
+  /** 서버에 올린 이 코드의 기록·사진을 완전히 삭제합니다 */
+  async deleteRemote() {
+    if (!this.on) return null;
+    return await this.rpc('camp_delete_session', { p_code: this.code });
   },
 
   /** 받아온 기록을 로컬에 합칩니다 — 비어 있는 칸만 채웁니다 */
@@ -1378,11 +1398,13 @@ async function renderReport(main) {
     </div>
 
     <h3>3) 다 끝냈다면</h3>
-    <p class="hint" style="margin-top:0">여러 학생이 같은 기기를 쓴다면, 다음 학생을 위해 기록을 지워 주세요.
-      <b>PDF를 먼저 저장했는지 꼭 확인하세요!</b></p>
+    <p class="hint" style="margin-top:0"><b>PDF를 먼저 저장했는지 꼭 확인하세요!</b>
+      저장을 마쳤다면 아래 버튼으로 내 기록을 정리합니다.</p>
     <div class="lab-buttons">
-      <button class="pbtn" id="btn-reset-all" style="border-color:#e5484d;color:#e5484d">🧹 모두 지우고 새로 시작</button>
-    </div>`;
+      <button class="pbtn" id="btn-reset-all" style="border-color:#e5484d;color:#e5484d">🧹 이 기기에서만 지우기</button>
+      <button class="pbtn" id="btn-purge-all" style="border-color:#e5484d;color:#e5484d">🗑️ 내 정보 모두 지우기</button>
+    </div>
+    <p class="hint" id="purge-hint"></p>`;
   main.appendChild(ctrl);
 
   const paper = el('div', 'report-paper');
@@ -1432,7 +1454,61 @@ async function renderReport(main) {
     await photoDB.clear();
     state.current = 0;
     render();
-    toast('모두 지웠어요. 새로 시작할 수 있습니다.');
+    toast('이 기기의 기록을 지웠어요.');
+  });
+
+  /* --- 서버(Supabase)에 올린 것까지 완전히 삭제 --- */
+  const purgeBtn = $('#btn-purge-all', ctrl);
+  const purgeHint = $('#purge-hint', ctrl);
+  purgeHint.innerHTML = sync.on
+    ? `연결된 코드 <b>${esc(sync.code)}</b>의 사진과 기록을 <b>서버에서도</b> 지웁니다. 실험이 끝났다면 이 버튼을 눌러 주세요.`
+    : '이 기기의 기록을 지웁니다. (연결된 코드가 없어 서버에 저장된 것은 없습니다)';
+
+  purgeBtn.addEventListener('click', async () => {
+    const connected = sync.on;
+    const ok1 = await askConfirm({
+      title: '내 정보를 모두 지울까요?',
+      body: connected
+        ? `이 기기의 기록과 사진은 물론, **서버에 올린 코드 ${esc(sync.code)}의 사진까지 전부 삭제**됩니다. 다른 기기에서도 더 이상 볼 수 없습니다.`
+        : '이 기기의 기록과 사진이 **전부 사라집니다.**',
+      ok: '지우기', danger: true
+    });
+    if (!ok1) return;
+    const ok2 = await askConfirm({
+      title: 'PDF는 저장하셨나요?',
+      body: '되돌릴 수 없습니다. 보고서를 저장했는지 확인한 뒤 눌러 주세요.',
+      ok: '네, 모두 지웁니다', danger: true
+    });
+    if (!ok2) return;
+
+    purgeBtn.disabled = true;
+    purgeBtn.textContent = '지우는 중…';
+
+    let serverMsg = '';
+    if (connected) {
+      try {
+        const r = await sync.deleteRemote();
+        serverMsg = ` 서버에서 사진 ${(r && r.photos) || 0}장도 지웠습니다.`;
+      } catch (e) {
+        /* 서버 삭제 실패해도 로컬 정리는 진행합니다 */
+        console.warn(e);
+        purgeBtn.disabled = false;
+        purgeBtn.textContent = '🗑️ 내 정보 모두 지우기';
+        const go = await askConfirm({
+          title: '서버 기록을 지우지 못했어요',
+          body: `${esc(e.message)}\n\n이 기기의 기록만 지울까요? 서버에 남은 것은 **30일 뒤 자동으로 사라집니다.**`,
+          ok: '이 기기만 지우기', danger: true
+        });
+        if (!go) return;
+      }
+    }
+
+    store.clearAll();
+    await photoDB.clear();
+    sync.forget();
+    state.current = 0;
+    render();
+    toast('내 정보를 모두 지웠어요.' + serverMsg, 4500);
   });
 }
 

@@ -242,6 +242,27 @@ begin
 end;
 $$;
 
+-- ---------- 6-1) 코드 통째로 삭제 (학생이 "내 정보 모두 지우기") ----------
+-- 실험이 끝난 학생이 스스로 지우게 해서 DB가 쌓이지 않도록 합니다.
+create or replace function public.camp_delete_session(p_code text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code   text := camp_check(p_code);
+  v_photos int;
+begin
+  delete from camp_photos where code = v_code;
+  get diagnostics v_photos = row_count;
+
+  delete from camp_sessions where code = v_code;
+
+  return jsonb_build_object('deleted', true, 'code', v_code, 'photos', v_photos);
+end;
+$$;
+
 -- ---------- 7) 만료 정리 ----------
 create or replace function public.camp_cleanup()
 returns void
@@ -266,6 +287,7 @@ grant execute on function public.camp_photo_add(text, text, text)    to anon, au
 grant execute on function public.camp_photo_list(text)               to anon, authenticated;
 grant execute on function public.camp_photo_get(text, uuid)          to anon, authenticated;
 grant execute on function public.camp_photo_delete(text, uuid)       to anon, authenticated;
+grant execute on function public.camp_delete_session(text)           to anon, authenticated;
 
 -- ---------- 9) (선택) 자동 정리 ----------
 -- Dashboard → Database → Extensions 에서 pg_cron 활성화 후:

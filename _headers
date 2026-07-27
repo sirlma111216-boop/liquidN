@@ -1,0 +1,35 @@
+# Cloudflare Pages 캐시 규칙
+#
+# 왜 필요한가:
+#   index.html 이 app.js / content.js 를 버전 표시 없이 부르기 때문에,
+#   브라우저가 "예전에 받은 파일"을 계속 써서 수정한 내용이 반영되지 않는다.
+#   수업 당일에 학생들이 옛날 버전을 보게 되면 치명적이므로 막아 둔다.
+#
+# no-cache 의 뜻:
+#   "쓰지 마라"가 아니라 "쓰기 전에 서버에 물어봐라".
+#   바뀐 게 없으면 서버가 304 만 돌려주므로 느려지지 않는다.
+
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/app.js
+  Cache-Control: no-cache
+
+/content.js
+  Cache-Control: no-cache
+
+/styles.css
+  Cache-Control: no-cache
+
+/api/*
+  Cache-Control: no-store
+
+# 아래는 거의 바뀌지 않으므로 오래 캐시해도 된다 (수업 중 로딩이 빨라진다)
+/godirect.js
+  Cache-Control: public, max-age=604800
+
+/images/*
+  Cache-Control: public, max-age=604800

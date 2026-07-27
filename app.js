@@ -393,6 +393,16 @@ function renderBlock(b) {
     case 'photo':
       return buildPhotoRow(b);
 
+    /* 활동마다 따로 두는 사진 칸.
+       실험이 여러 개인 단계에서 한 칸만 두면 나중에 어느 실험 사진인지
+       알 수 없으므로, 활동이 끝나는 자리마다 하나씩 놓습니다. */
+    case 'photoUpload': {
+      const card = el('div', 'card photo-card');
+      card.appendChild(el('h4', 'photo-card-title', `📷 ${esc(b.label)} 사진 남기기`));
+      card.appendChild(buildPhotoZone(b.id));
+      return card;
+    }
+
     case 'sensorLab':
       return buildSensorLab();
 
@@ -682,7 +692,7 @@ const sync = {
    튀어 버립니다. 자리를 고정해 두면 펼쳐도 그 칸만 길어집니다.
 ----------------------------------------------------------- */
 const SIDE_TYPES = ['why', 'photo', 'video'];              // 오른쪽 칸
-const FULL_TYPES = ['fact', 'danger', 'compare', 'cards', 'sensorLab']; // 전체 폭
+const FULL_TYPES = ['fact', 'danger', 'compare', 'cards', 'sensorLab', 'photoUpload']; // 전체 폭
 
 function buildBlocks(step) {
   const wrap = el('div', 'blocks');
@@ -872,13 +882,13 @@ function buildRecordZone(step) {
   });
   zone.appendChild(card);
 
-  if (step.photos) {
-    zone.appendChild(el('h3', null, '📷 실험 사진 남기기'));
-    const pc = el('div', 'card');
-    pc.appendChild(buildPhotoZone(step.id));
-    zone.appendChild(pc);
-  }
+  /* 사진은 활동이 끝나는 자리마다 따로 둡니다 (photoUpload 블록) */
   return zone;
+}
+
+/** 이 단계에 있는 사진 칸들 — [{id, label}] */
+function stepPhotoSlots(step) {
+  return (step.blocks || []).filter(b => b.type === 'photoUpload');
 }
 
 /* -----------------------------------------------------------
@@ -1701,8 +1711,17 @@ async function buildReportPaper(paper) {
   for (const step of STEPS) {
     if (!step.records || !step.records.length) continue;
     const answers = step.records.map(r => ({ q: r.label, a: store.get(r.id) }));
-    const photos = allPhotos.filter(x => x.stepId === step.id);
-    const hasAny = answers.some(a => a.a.trim()) || photos.length;
+
+    /* 활동별 사진 칸을 모은다. 예전 방식(단계 id 로 저장된 것)도 함께 챙긴다. */
+    const slots = stepPhotoSlots(step).map(s => ({
+      label: s.label,
+      rows: allPhotos.filter(x => x.stepId === s.id)
+    }));
+    const legacy = allPhotos.filter(x => x.stepId === step.id);
+    if (legacy.length) slots.push({ label: '', rows: legacy });
+
+    const photoCount = slots.reduce((a, s) => a + s.rows.length, 0);
+    const hasAny = answers.some(a => a.a.trim()) || photoCount;
 
     html += `<div class="rp-sec">
       <h2>${step.icon} ${esc(step.title)}</h2>`;
@@ -1733,9 +1752,11 @@ async function buildReportPaper(paper) {
                <tr><th>온도(℃)</th>${picked.map(x => `<td>${x.v.toFixed(1)}</td>`).join('')}</tr></table>`;
     }
 
-    if (photos.length) {
-      html += `<div class="rp-photos">${photos.map(x => `<img src="${x.dataUrl}" alt="실험 사진">`).join('')}</div>`;
-    }
+    slots.forEach(s => {
+      if (!s.rows.length) return;
+      if (s.label) html += `<div class="rp-photolabel">📷 ${esc(s.label)}</div>`;
+      html += `<div class="rp-photos">${s.rows.map(x => `<img src="${x.dataUrl}" alt="${esc(s.label || '실험')} 사진">`).join('')}</div>`;
+    });
     if (!hasAny) html += `<div class="rp-q"><div class="a blank">이 단계는 기록이 없습니다.</div></div>`;
     html += `</div>`;
   }

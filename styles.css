@@ -391,6 +391,26 @@ canvas.chart { width: 100%; height: 320px; display: block; }
 .manual-table th, .manual-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: center; }
 .manual-table th { background: var(--brand-soft); color: var(--brand-deep); }
 .manual-table input { padding: 6px 8px; text-align: center; }
+/* 모둠끼리 측정 데이터 나누기 */
+.lab-share {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  background: var(--brand-soft); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px 12px; margin-bottom: 14px;
+}
+.lab-share .pbtn { padding: 9px 14px; font-size: 14.5px; }
+.lab-share .hint { margin: 0; flex: 1 1 220px; }
+.lab-share .hint.warn { color: var(--warn-ink); }
+.lab-share .hint.good { color: var(--good); }
+.ds-code {
+  font-size: 19px; letter-spacing: .18em; color: var(--brand-deep);
+  font-variant-numeric: tabular-nums;
+}
+.linkbtn {
+  border: none; background: none; padding: 0 2px;
+  color: var(--brand); font: inherit; font-weight: 700;
+  text-decoration: underline; cursor: pointer;
+}
+
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
 .tab {
   border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
@@ -445,6 +465,11 @@ html[data-theme="dark"] .report-paper { background: #fdfdfd; }
 .rp-q .a.blank { color: #9db1c4; }
 .rp-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
 .rp-photos img { width: 100%; border-radius: 8px; border: 1px solid #d6e6f5; display: block; }
+.rp-source {
+  margin-top: 6px; font-size: 12.5px; color: #4a6580;
+  background: #f2f8fd; border: 1px solid #d6e6f5; border-radius: 6px;
+  padding: 5px 10px; display: inline-block;
+}
 .rp-datatable { border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
 .rp-datatable th, .rp-datatable td { border: 1px solid #d6e6f5; padding: 3px 8px; text-align: center; }
 
@@ -501,6 +526,13 @@ html[data-theme="dark"] .report-paper { background: #fdfdfd; }
 }
 .modal-box h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.02em; }
 .modal-box p { margin: 0; color: var(--ink-soft); font-size: 15.5px; line-height: 1.65; }
+.modal-input {
+  width: 100%; margin-top: 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; font: inherit; font-size: 18px;
+  background: var(--card-2); color: var(--ink);
+}
+.modal-input:focus { outline: 2px solid var(--brand); border-color: var(--brand); }
 .modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
 .modal-btns .pbtn { padding: 11px 20px; }
 .pbtn.solid.danger { background: #e5484d; border-color: #e5484d; color: #fff; }

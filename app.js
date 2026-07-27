@@ -76,6 +76,54 @@ function askConfirm(opts) {
   });
 }
 
+/**
+ * 짧은 값을 입력받는 창. `prompt()` 대신 씁니다.
+ * (prompt 도 confirm 과 똑같이 브라우저가 막아 버릴 수 있습니다)
+ * 취소하면 null 을 돌려줍니다.
+ */
+function askInput(opts) {
+  const o = Object.assign({ title: '입력', body: '', ok: '확인', cancel: '취소',
+                            placeholder: '', maxlength: 40, upper: false }, opts || {});
+  return new Promise(resolve => {
+    const wrap = el('div', 'modal');
+    wrap.innerHTML = `
+      <div class="modal-box" role="dialog" aria-modal="true" aria-label="${esc(o.title)}">
+        <h3>${esc(o.title)}</h3>
+        ${o.body ? `<p>${md(o.body)}</p>` : ''}
+        <input type="text" class="modal-input" maxlength="${o.maxlength}"
+               placeholder="${esc(o.placeholder)}" autocomplete="off"
+               ${o.upper ? 'style="text-transform:uppercase;letter-spacing:.25em;font-weight:700;text-align:center"' : ''}>
+        <div class="modal-btns">
+          <button class="pbtn" data-a="no">${esc(o.cancel)}</button>
+          <button class="pbtn solid" data-a="yes">${esc(o.ok)}</button>
+        </div>
+      </div>`;
+
+    const input = $('.modal-input', wrap);
+    const close = (v) => {
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+      resolve(v);
+    };
+    const submit = () => {
+      const v = input.value.trim();
+      close(v ? (o.upper ? v.toUpperCase() : v) : null);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    };
+
+    $('[data-a="yes"]', wrap).addEventListener('click', submit);
+    $('[data-a="no"]', wrap).addEventListener('click', () => close(null));
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(null); });
+
+    document.body.appendChild(wrap);
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => input.focus(), 30);
+  });
+}
+
 /* -----------------------------------------------------------
    1. 저장소 — 글은 localStorage, 사진은 IndexedDB
 ----------------------------------------------------------- */
@@ -375,6 +423,8 @@ const sync = {
   busy: false,
 
   get on() { return !!(this.cfg && this.cfg.configured && this.code); },
+  /** 코드가 없어도 서버를 쓸 수 있는 상태인지 (모둠 데이터 공유에 씁니다) */
+  get available() { return !!(this.cfg && this.cfg.configured); },
 
   async init() {
     this.code = localStorage.getItem('cryoCamp.code') || null;
@@ -930,7 +980,7 @@ function drawChart(canvas, points, opts) {
   ctx.fillStyle = cInk;
   ctx.font = 'bold 13px system-ui, sans-serif';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.fillText('물의 냉각곡선', pad.l + 4, pad.t + 2);
+  ctx.fillText(opts.title || '물의 냉각곡선', pad.l + 4, pad.t + 2);
 }
 
 /* -----------------------------------------------------------
@@ -941,8 +991,99 @@ const lab = {
   points: [], recording: false, t0: 0,
   mode: 'sensor',
   manualRows: [['0', '']],
-  node: null
+  node: null,
+  /* 이 곡선이 어디서 왔는지 — null 이면 직접 측정,
+     {code, team} 이면 다른 모둠(또는 우리 모둠 측정자)에게 받은 것 */
+  from: null
 };
+
+/* -----------------------------------------------------------
+   6-1. 모둠끼리 측정 데이터 나누기
+   센서가 모둠당 하나뿐이라 한 명만 측정할 수 있습니다.
+   측정한 사람이 「코드로 저장」 → 모둠원이 「코드 불러오기」로 같은 곡선을 받습니다.
+   기존 함수(camp_create_session / camp_load)를 그대로 쓰므로 SQL 추가가 필요 없습니다.
+----------------------------------------------------------- */
+function dsMsg(html, tone) {
+  const n = lab.node && $('#ds-msg', lab.node);
+  if (!n) return;
+  n.className = 'hint' + (tone ? ' ' + tone : '');
+  n.innerHTML = html;
+}
+
+/** 현재 곡선의 출처를 한 줄로 (보고서·화면 공용) */
+function datasetSourceText() {
+  const d = store.data.dataset;
+  const f = d && d.from;
+  return f && f.code
+    ? `공유 코드 ${f.code}${f.team ? ' (' + f.team + ')' : ''} 로 받은 데이터`
+    : '직접 측정한 데이터';
+}
+
+async function saveDatasetCode() {
+  if (!lab.points.length) { toast('먼저 측정하거나 값을 입력해 주세요.'); return; }
+  if (!sync.available) { dsMsg('⚠️ 지금은 인터넷 연결이 필요한 기능을 쓸 수 없어요.', 'warn'); return; }
+
+  dsMsg('코드를 만드는 중…');
+  try {
+    const code = await sync.rpc('camp_create_session', {
+      p_payload: {
+        kind: 'dataset',
+        app: 'cryo-camp',
+        team: store.data.profile.team || '',
+        points: lab.points,
+        savedAt: Date.now()
+      }
+    });
+    const c = String(code).toUpperCase();
+    dsMsg(`✅ 모둠 코드 <b class="ds-code">${esc(c)}</b> — 모둠원에게 알려 주세요.
+           <button class="linkbtn" id="btn-ds-copy">복사</button>`);
+    const cp = lab.node && $('#btn-ds-copy', lab.node);
+    if (cp) cp.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(c); toast('코드를 복사했어요 ✓'); }
+      catch (e) { toast('복사하지 못했어요. 손으로 적어 주세요.'); }
+    });
+    toast('모둠 코드를 만들었어요 ✓');
+  } catch (e) {
+    dsMsg(`⚠️ ${esc(e.message)}`, 'warn');
+  }
+}
+
+async function loadDatasetCode() {
+  if (!sync.available) { dsMsg('⚠️ 지금은 인터넷 연결이 필요한 기능을 쓸 수 없어요.', 'warn'); return; }
+
+  const code = await askInput({
+    title: '모둠 코드 불러오기',
+    body: '측정한 친구가 알려 준 **5자리 코드**를 넣어 주세요.',
+    placeholder: 'K7QF2', maxlength: 5, upper: true, ok: '불러오기'
+  });
+  if (!code) return;
+  if (code.length !== 5) { dsMsg('⚠️ 코드는 5자리예요.', 'warn'); return; }
+
+  dsMsg('데이터를 받는 중…');
+  try {
+    const info = await sync.rpc('camp_load', { p_code: code });
+    const p = info.payload || {};
+    if (p.kind !== 'dataset' || !Array.isArray(p.points) || !p.points.length) {
+      dsMsg('⚠️ 이 코드에는 측정 데이터가 없어요. 코드를 다시 확인해 주세요.', 'warn');
+      return;
+    }
+    lab.points = p.points.slice();
+    lab.from = { code: info.code, team: p.team || '' };
+    store.data.dataset = {
+      points: lab.points.slice(), savedAt: Date.now(),
+      source: 'shared', from: lab.from
+    };
+    store.save();
+    redrawLab();
+    updateSaveInfo();
+    dsMsg(`📥 <b>${esc(info.code)}</b>${p.team ? ' · ' + esc(p.team) : ''} 의 데이터를 받았어요.
+           점 ${p.points.length}개 · 보고서에 자동으로 담겼습니다.`, 'good');
+    renderNav();
+    toast('모둠 데이터를 받았어요 ✓');
+  } catch (e) {
+    dsMsg(`⚠️ ${esc(e.message)}`, 'warn');
+  }
+}
 
 function buildSensorLab() {
   const box = el('div', 'lab');
@@ -951,6 +1092,12 @@ function buildSensorLab() {
     <div class="tabs">
       <button class="tab active" data-mode="sensor">무선 센서로 측정</button>
       <button class="tab" data-mode="manual">직접 입력하기</button>
+    </div>
+
+    <div class="lab-share">
+      <button class="pbtn" id="btn-ds-save">📤 코드로 저장</button>
+      <button class="pbtn" id="btn-ds-load">📥 코드 불러오기</button>
+      <span class="hint" id="ds-msg"></span>
     </div>
 
     <div data-pane="sensor">
@@ -985,7 +1132,10 @@ function buildSensorLab() {
   lab.node = box;
 
   /* 저장해 둔 데이터가 있으면 되살리기 */
-  if (store.data.dataset && store.data.dataset.points) lab.points = store.data.dataset.points.slice();
+  if (store.data.dataset && store.data.dataset.points) {
+    lab.points = store.data.dataset.points.slice();
+    lab.from = store.data.dataset.from || null;
+  }
 
   setTimeout(() => {
     redrawLab();
@@ -1002,6 +1152,9 @@ function buildSensorLab() {
     $('[data-pane="sensor"]', box).hidden = lab.mode !== 'sensor';
     $('[data-pane="manual"]', box).hidden = lab.mode !== 'manual';
   }));
+
+  $('#btn-ds-save', box).addEventListener('click', saveDatasetCode);
+  $('#btn-ds-load', box).addEventListener('click', loadDatasetCode);
 
   $('#btn-connect', box).addEventListener('click', connectSensor);
   $('#btn-record', box).addEventListener('click', toggleRecording);
@@ -1020,12 +1173,18 @@ function buildSensorLab() {
       .filter(p => !isNaN(p.t) && !isNaN(p.v))
       .sort((a, b) => a.t - b.t);
     if (pts.length < 2) { toast('숫자를 2줄 이상 채워 주세요.'); return; }
-    lab.points = pts; redrawLab();
+    lab.points = pts;
+    lab.from = null;            // 직접 넣은 값
+    redrawLab();
     toast('그래프를 그렸어요 ✓');
   });
   $('#btn-savedata', box).addEventListener('click', () => {
     if (!lab.points.length) { toast('저장할 데이터가 없어요.'); return; }
-    store.data.dataset = { points: lab.points.slice(), savedAt: Date.now(), source: lab.mode };
+    store.data.dataset = {
+      points: lab.points.slice(), savedAt: Date.now(),
+      source: lab.from ? 'shared' : lab.mode,
+      from: lab.from || null
+    };
     store.save();
     sync.schedulePush();
     updateSaveInfo();
@@ -1116,6 +1275,7 @@ function toggleRecording() {
     lab.recording = true;
     lab.t0 = Date.now();
     lab.points = [];
+    lab.from = null;            // 이제부터는 직접 측정한 데이터
     btn.textContent = '⏹ 측정 끝내기';
     btn.classList.add('solid');
     labStatus('측정 중…  물을 액화질소에 담가 보세요!', 'busy');
@@ -1133,7 +1293,11 @@ function toggleRecording() {
 function redrawLab() {
   if (!lab.node) return;
   const c = $('#chart', lab.node);
-  if (c) drawChart(c, lab.points);
+  if (!c) return;
+  /* 받은 데이터는 제목에 표시해서 내 측정과 헷갈리지 않게 */
+  drawChart(c, lab.points, {
+    title: lab.from ? `받은 냉각곡선 (${lab.from.code})` : '물의 냉각곡선'
+  });
 }
 
 function renderManualTable() {
@@ -1164,7 +1328,9 @@ function updateSaveInfo() {
   if (!lab.node) return;
   const n = $('#save-info', lab.node);
   const d = store.data.dataset;
-  n.textContent = d ? `보고서에 ${d.points.length}개 값이 담겨 있어요 ✓` : '아직 보고서에 담지 않았어요';
+  n.textContent = d
+    ? `보고서에 ${d.points.length}개 값이 담겨 있어요 ✓ · ${datasetSourceText()}`
+    : '아직 보고서에 담지 않았어요';
 }
 
 /* -----------------------------------------------------------
@@ -1550,9 +1716,15 @@ async function buildReportPaper(paper) {
     /* 냉각곡선 그래프는 실험 단계에 붙임 */
     if (step.id === 's5' && store.data.dataset && store.data.dataset.points.length) {
       const pts = store.data.dataset.points;
+      const from = store.data.dataset.from;
       const c = document.createElement('canvas');
-      drawChart(c, pts, { forPrint: true, width: 640, height: 300 });
+      drawChart(c, pts, {
+        forPrint: true, width: 640, height: 300,
+        title: from ? `받은 냉각곡선 (${from.code})` : '물의 냉각곡선'
+      });
       html += `<div style="margin-top:10px"><img src="${c.toDataURL('image/png')}" style="width:100%;border:1px solid #d6e6f5;border-radius:8px" alt="냉각곡선 그래프"></div>`;
+      /* 누구의 데이터로 분석했는지 보고서에 남긴다 */
+      html += `<div class="rp-source">데이터 출처 — ${esc(datasetSourceText())}</div>`;
 
       /* 데이터 표 — 너무 길면 골라서 20개만 */
       const stepN = Math.max(1, Math.ceil(pts.length / 20));
@@ -1586,6 +1758,7 @@ function reportAsText() {
   const d = store.data.dataset;
   if (d && d.points.length) {
     out += `■ 물의 냉각곡선 측정 데이터 (${d.points.length}개)\n`;
+    out += `출처: ${datasetSourceText()}\n`;
     const stepN = Math.max(1, Math.ceil(d.points.length / 20));
     d.points.filter((_, i) => i % stepN === 0).slice(0, 20)
       .forEach(x => { out += `${x.t.toFixed(0)}초 : ${x.v.toFixed(1)}℃\n`; });
